@@ -1,0 +1,4 @@
+.claude/
+Dockerfile
+tsconfig.json
+src/
