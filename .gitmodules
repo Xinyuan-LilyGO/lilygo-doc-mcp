@@ -1,0 +1,4 @@
+[submodule "vendor/docs"]
+	path = vendor/docs
+	url = https://github.com/Xinyuan-LilyGO/documentation.git
+	branch = master

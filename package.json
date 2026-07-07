@@ -4,14 +4,12 @@
   "description": "MCP server for LILYGO product documentation",
   "type": "module",
   "main": "dist/index.js",
-  "bin": {
-    "lilygo-doc-mcp": "dist/index.js"
-  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "prepublishOnly": "npm run build"
+    "docs:init": "git submodule update --init --depth 1 vendor/docs",
+    "docs:update": "git submodule update --remote --merge vendor/docs"
   },
   "keywords": [
     "mcp",
@@ -23,7 +21,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.67"
   },
   "devDependencies": {
