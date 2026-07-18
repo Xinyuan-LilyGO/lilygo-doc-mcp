@@ -6,17 +6,23 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
+
+export function resolveDefaultDocsDir(moduleUrl = import.meta.url): string {
+  const repoRoot = join(dirname(fileURLToPath(moduleUrl)), "..");
+  return join(repoRoot, "vendor/docs/en/products");
+}
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
-const DOCS_DIR = process.env.DOCS_DIR ?? join(fileURLToPath(import.meta.url), "../../../vendor/docs/en/products");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const DOCS_DIR = process.env.DOCS_DIR ?? resolveDefaultDocsDir();
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -28,44 +34,20 @@ interface ProductMeta {
   shopLink: string;
 }
 
-// ── Known categories ────────────────────────────────────────────────────────
-
-const KNOWN_CATEGORIES = [
-  "industrial-series",
-  "other",
-  "t-beam-series",
-  "t-camera-series",
-  "t-connect-series",
-  "t-deck-series",
-  "t-display-series",
-  "t-dongle-series",
-  "t-echo-series",
-  "t-embed-series",
-  "t-encoder-series",
-  "t-eth-series",
-  "t-halow-series",
-  "t-lora-series",
-  "t-relay-series",
-  "t-sim-series",
-  "t-twr-series",
-  "t-watch-series",
-  "t3-series",
-];
-
 // ── Local file reading ─────────────────────────────────────────────────────
 
-async function readLocalFile(relPath: string): Promise<string | null> {
+async function readLocalFile(docsDir: string, relPath: string): Promise<string | null> {
   try {
-    return await readFile(join(DOCS_DIR, relPath), "utf-8");
+    return await readFile(join(docsDir, relPath), "utf-8");
   } catch {
     return null;
   }
 }
 
-async function listLocalDir(relPath: string): Promise<string[]> {
+async function listLocalDir(docsDir: string, relPath: string): Promise<string[]> {
   try {
     const { readdir } = await import("node:fs/promises");
-    const entries = await readdir(join(DOCS_DIR, relPath), { withFileTypes: true });
+    const entries = await readdir(join(docsDir, relPath), { withFileTypes: true });
     return entries.filter((e) => e.isDirectory() && e.name !== "index").map((e) => e.name);
   } catch {
     return [];
@@ -145,12 +127,13 @@ function parseMarkdownTables(text: string): Array<Record<string, string>[]> {
 
 // ── Product index (in-memory cache, reloaded on webhook) ──────────────────
 
-let _cache: ProductMeta[] | null = null;
+const productCaches = new Map<string, ProductMeta[]>();
 
-async function loadProducts(): Promise<ProductMeta[]> {
+async function loadProducts(docsDir: string): Promise<ProductMeta[]> {
   const entries: Array<{ category: string; product: string }> = [];
-  for (const category of KNOWN_CATEGORIES) {
-    const products = await listLocalDir(category);
+  const categories = await listLocalDir(docsDir, "");
+  for (const category of categories) {
+    const products = await listLocalDir(docsDir, category);
     for (const product of products) {
       entries.push({ category, product });
     }
@@ -159,7 +142,7 @@ async function loadProducts(): Promise<ProductMeta[]> {
   const products: ProductMeta[] = [];
   await Promise.all(
     entries.map(async ({ category, product }) => {
-      const raw = await readLocalFile(`${category}/${product}/index.md`);
+      const raw = await readLocalFile(docsDir, `${category}/${product}/index.md`);
       if (!raw) return;
       const { data, body } = parseFrontmatter(raw);
       products.push({
@@ -174,27 +157,36 @@ async function loadProducts(): Promise<ProductMeta[]> {
   return products;
 }
 
-async function getProducts(): Promise<ProductMeta[]> {
-  if (!_cache) {
-    _cache = await loadProducts();
+async function getProducts(docsDir: string): Promise<ProductMeta[]> {
+  let products = productCaches.get(docsDir);
+  if (!products) {
+    products = await loadProducts(docsDir);
+    productCaches.set(docsDir, products);
   }
-  return _cache;
+  return products;
 }
 
-async function reloadProducts(): Promise<void> {
-  _cache = await loadProducts();
-  console.error(`[lilygo-docs] reloaded ${_cache.length} products`);
+async function reloadProducts(docsDir: string): Promise<void> {
+  const products = await loadProducts(docsDir);
+  productCaches.set(docsDir, products);
+  console.error(`[lilygo-docs] reloaded ${products.length} products`);
 }
 
-async function fetchProductBody(meta: ProductMeta): Promise<string> {
-  const raw = await readLocalFile(`${meta.category}/${meta.product}/index.md`);
+async function fetchProductBody(docsDir: string, meta: ProductMeta): Promise<string> {
+  const raw = await readLocalFile(docsDir, `${meta.category}/${meta.product}/index.md`);
   if (!raw) return "";
   return parseFrontmatter(raw).body;
 }
 
-async function findProduct(name: string): Promise<ProductMeta | undefined> {
+async function fetchProductGuide(docsDir: string, meta: ProductMeta): Promise<string> {
+  const raw = await readLocalFile(docsDir, `${meta.category}/${meta.product}/quick-start.md`);
+  if (!raw) return "";
+  return parseFrontmatter(raw).body;
+}
+
+async function findProduct(docsDir: string, name: string): Promise<ProductMeta | undefined> {
   const lower = name.toLowerCase().replace(/\s+/g, "-");
-  const products = await getProducts();
+  const products = await getProducts(docsDir);
   return products.find(
     (p) =>
       p.product.toLowerCase() === lower ||
@@ -205,9 +197,8 @@ async function findProduct(name: string): Promise<ProductMeta | undefined> {
 // ── Git submodule update ───────────────────────────────────────────────────
 
 async function pullDocsUpdate(): Promise<void> {
-  const repoRoot = join(fileURLToPath(import.meta.url), "../../..");
   try {
-    await execFileAsync("git", ["-C", repoRoot, "submodule", "update", "--remote", "--merge", "vendor/docs"]);
+    await execFileAsync("git", ["-C", REPO_ROOT, "submodule", "update", "--remote", "--merge", "vendor/docs"]);
     console.error("[lilygo-docs] submodule updated");
   } catch (e) {
     console.error("[lilygo-docs] submodule update failed:", e);
@@ -229,7 +220,11 @@ function verifyWebhookSignature(body: string, signature: string | undefined): bo
 
 // ── MCP Server setup ───────────────────────────────────────────────────────
 
-function createMcpServer(): McpServer {
+function logMcpRequest(tool: string, args: Record<string, unknown>): void {
+  console.error(`[lilygo-docs] MCP request ${JSON.stringify({ tool, arguments: args })}`);
+}
+
+export function createMcpServer(docsDir = DOCS_DIR): McpServer {
   const server = new McpServer({ name: "lilygo-docs", version: "1.0.0" });
 
   server.registerTool(
@@ -243,7 +238,8 @@ function createMcpServer(): McpServer {
       },
     },
     async ({ series, tags, keyword }) => {
-      let products = await getProducts();
+      logMcpRequest("list_products", { series, tags, keyword });
+      let products = await getProducts(docsDir);
       if (series) {
         const s = series.toLowerCase();
         products = products.filter((p) => p.category.toLowerCase() === s);
@@ -272,7 +268,7 @@ function createMcpServer(): McpServer {
   server.registerTool(
     "get_product",
     {
-      description: "Get the documentation for a specific LILYGO product. Returns the full markdown or a specific section.",
+      description: "Get documentation for a LILYGO product. The full response includes both the product page and programming guide; a specific section can also be requested.",
       inputSchema: {
         product: z.string().describe("Product name, e.g. 't-deck', 'T-Lora Pager', 't-display-s3-amoled'"),
         section: z
@@ -283,26 +279,30 @@ function createMcpServer(): McpServer {
       },
     },
     async ({ product, section }) => {
-      const meta = await findProduct(product);
+      logMcpRequest("get_product", { product, section });
+      const meta = await findProduct(docsDir, product);
       if (!meta) {
         return {
           content: [{ type: "text", text: `Product "${product}" not found. Use list_products to see available products.` }],
           isError: true,
         };
       }
-      const body = await fetchProductBody(meta);
+      const body = await fetchProductBody(docsDir, meta);
       if (!body) {
         return { content: [{ type: "text", text: `Failed to fetch documentation for "${product}".` }], isError: true };
       }
       let text: string;
       switch (section) {
         case "overview":    text = extractSection(body, /overview/i); break;
-        case "quickstart":  text = extractSection(body, /quick.?start/i); break;
+        case "quickstart":  text = await fetchProductGuide(docsDir, meta); break;
         case "features":    text = extractSection(body, /key.?features/i); break;
         case "parameters":  text = extractSection(body, /product.?param/i); break;
         case "pins":        text = extractSection(body, /pin.?(diagram|map)/i); break;
         case "faq":         text = extractSection(body, /^#{1,3} faq/i); break;
-        default:            text = body;
+        default: {
+          const guide = await fetchProductGuide(docsDir, meta);
+          text = guide ? `${body}\n\n---\n\n${guide}` : body;
+        }
       }
       if (!text) {
         text = section === "all" ? body : `Section "${section}" not found in ${meta.title} documentation.`;
@@ -312,27 +312,60 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
+    "get_product_guide",
+    {
+      description: "Get the dedicated programming guide for a LILYGO product, including SDK setup, Arduino or PlatformIO configuration, dependency versions, and code examples.",
+      inputSchema: {
+        product: z.string().describe("Product name, e.g. 't-deck', 't-lora-pager', 't-display-s3'"),
+      },
+    },
+    async ({ product }) => {
+      logMcpRequest("get_product_guide", { product });
+      const meta = await findProduct(docsDir, product);
+      if (!meta) {
+        return {
+          content: [{ type: "text", text: `Product "${product}" not found. Use list_products to see available products.` }],
+          isError: true,
+        };
+      }
+      const guide = await fetchProductGuide(docsDir, meta);
+      if (!guide) {
+        return {
+          content: [{ type: "text", text: `Programming guide not found for "${product}".` }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: "text", text: guide }] };
+    }
+  );
+
+  server.registerTool(
     "search_products",
     {
-      description: "Full-text search across all LILYGO product documentation. Returns matching products with context excerpts.",
+      description: "Full-text search across LILYGO product pages and programming guides. Returns matching products with context excerpts.",
       inputSchema: {
         query: z.string().describe("Search query, e.g. 'SX1262 LoRa GPS', 'e-paper display', 'BQ25896'"),
         max_results: z.number().int().min(1).max(20).optional().default(10),
       },
     },
     async ({ query, max_results }) => {
+      logMcpRequest("search_products", { query, max_results });
       const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1);
-      const products = await getProducts();
+      const products = await getProducts(docsDir);
       const results: Array<{ category: string; product: string; title: string; shopLink: string; score: number; excerpts: string[] }> = [];
 
       await Promise.all(
         products.map(async (meta) => {
-          const body = await fetchProductBody(meta);
-          if (!body) return;
-          const lower = body.toLowerCase();
+          const [body, guide] = await Promise.all([
+            fetchProductBody(docsDir, meta),
+            fetchProductGuide(docsDir, meta),
+          ]);
+          const searchable = `${body}\n${guide}`;
+          if (!searchable.trim()) return;
+          const lower = searchable.toLowerCase();
           let score = 0;
           const excerpts: string[] = [];
-          const lines = body.split(/\r?\n/);
+          const lines = searchable.split(/\r?\n/);
 
           for (const term of terms) {
             let pos = 0;
@@ -376,14 +409,15 @@ function createMcpServer(): McpServer {
       },
     },
     async ({ product }) => {
-      const meta = await findProduct(product);
+      logMcpRequest("get_product_specs", { product });
+      const meta = await findProduct(docsDir, product);
       if (!meta) {
         return {
           content: [{ type: "text", text: `Product "${product}" not found. Use list_products to see available products.` }],
           isError: true,
         };
       }
-      const body = await fetchProductBody(meta);
+      const body = await fetchProductBody(docsDir, meta);
       if (!body) {
         return { content: [{ type: "text", text: `Failed to fetch documentation for "${product}".` }], isError: true };
       }
@@ -432,7 +466,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     const event = req.headers["x-github-event"];
     if (event === "push") {
       res.writeHead(202).end("Accepted");
-      pullDocsUpdate().then(reloadProducts).catch((e) => console.error("[lilygo-docs] reload error:", e));
+      pullDocsUpdate().then(() => reloadProducts(DOCS_DIR)).catch((e) => console.error("[lilygo-docs] reload error:", e));
     } else {
       res.writeHead(200).end("OK");
     }
@@ -441,7 +475,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
   // ── Health check ──────────────────────────────────────────────────────
   if (url.pathname === "/health" && req.method === "GET") {
-    const count = _cache?.length ?? -1;
+    const count = productCaches.get(DOCS_DIR)?.length ?? -1;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", products: count }));
     return;
@@ -449,16 +483,23 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
   // ── MCP SSE endpoint ──────────────────────────────────────────────────
   if (url.pathname === "/sse" && req.method === "GET") {
+    const remoteAddress = req.socket.remoteAddress ?? "unknown";
+    console.error(`[lilygo-docs] MCP SSE connection request remote=${remoteAddress}`);
     const transport = new SSEServerTransport("/messages", res);
-    const mcpServer = createMcpServer();
+    const mcpServer = createMcpServer(DOCS_DIR);
     await mcpServer.connect(transport);
     sseTransports.set(transport.sessionId, transport);
-    res.on("close", () => sseTransports.delete(transport.sessionId));
+    console.error(`[lilygo-docs] MCP SSE connected sessionId=${transport.sessionId} remote=${remoteAddress}`);
+    res.on("close", () => {
+      sseTransports.delete(transport.sessionId);
+      console.error(`[lilygo-docs] MCP SSE disconnected sessionId=${transport.sessionId} remote=${remoteAddress}`);
+    });
     return;
   }
 
   if (url.pathname === "/messages" && req.method === "POST") {
     const sessionId = url.searchParams.get("sessionId");
+    console.error(`[lilygo-docs] MCP message request sessionId=${sessionId ?? "missing"} remote=${req.socket.remoteAddress ?? "unknown"}`);
     const transport = sessionId ? sseTransports.get(sessionId) : undefined;
     if (!transport) {
       res.writeHead(400).end("No active SSE session");
@@ -473,13 +514,18 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
-// Pre-load product cache on startup
-getProducts()
-  .then((p) => console.error(`[lilygo-docs] loaded ${p.length} products`))
-  .catch((e) => console.error("[lilygo-docs] initial load failed:", e));
+export async function startServer(): Promise<void> {
+  getProducts(DOCS_DIR)
+    .then((p) => console.error(`[lilygo-docs] loaded ${p.length} products`))
+    .catch((e) => console.error("[lilygo-docs] initial load failed:", e));
 
-httpServer.listen(PORT, () => {
-  console.error(`[lilygo-docs] MCP server listening on http://0.0.0.0:${PORT}/mcp`);
-  console.error(`[lilygo-docs] Webhook endpoint: POST http://0.0.0.0:${PORT}/webhook`);
-  console.error(`[lilygo-docs] Health: GET http://0.0.0.0:${PORT}/health`);
-});
+  httpServer.listen(PORT, () => {
+    console.error(`[lilygo-docs] MCP server listening on http://0.0.0.0:${PORT}/sse`);
+    console.error(`[lilygo-docs] Webhook endpoint: POST http://0.0.0.0:${PORT}/webhook`);
+    console.error(`[lilygo-docs] Health: GET http://0.0.0.0:${PORT}/health`);
+  });
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  void startServer();
+}

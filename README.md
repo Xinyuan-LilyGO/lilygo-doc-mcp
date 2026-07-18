@@ -33,8 +33,8 @@ PORT=3000 npm start
 {
   "mcpServers": {
     "lilygo-docs": {
-      "type": "streamable-http",
-      "url": "http://localhost:3000/mcp"
+      "type": "sse",
+      "url": "http://localhost:3000/sse"
     }
   }
 }
@@ -68,23 +68,35 @@ GITHUB_WEBHOOK_SECRET=your-secret PORT=3000 npm start
 
 On every push to the documentation repo, the server will:
 1. Run `git submodule update --remote --merge vendor/docs`
-2. Reload the in-memory product cache
+2. Reload the in-memory product cache. Product categories are discovered automatically.
 
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/mcp` | `POST` / `GET` / `DELETE` | MCP Streamable HTTP transport |
+| `/sse` | `GET` | MCP SSE connection endpoint |
+| `/messages` | `POST` | MCP SSE message endpoint |
 | `/webhook` | `POST` | GitHub push webhook |
 | `/health` | `GET` | Returns `{ status, products }` |
+
+## Logging
+
+The server logs MCP SSE connections, message requests, disconnections, and tool calls. Tool-call logs include the tool name and arguments, but not returned document content.
+
+Follow logs from Docker with:
+
+```bash
+docker logs -f lilygo-doc-mcp
+```
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
 | `list_products` | List all products, filter by series / tags / keyword |
-| `get_product` | Get full docs or a specific section (overview, quickstart, features, parameters, pins, faq) |
-| `search_products` | Full-text search across all product docs with ranked excerpts |
+| `get_product` | Get full docs plus the programming guide, or a specific section (overview, quickstart, features, parameters, pins, faq) |
+| `get_product_guide` | Get the dedicated `quick-start.md` programming guide, including SDK setup, dependencies, and code examples |
+| `search_products` | Full-text search across product pages and programming guides with ranked excerpts |
 | `get_product_specs` | Extract structured specs: key features, parameter table, pin tables |
 
 ## Environment variables
