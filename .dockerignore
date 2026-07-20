@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+.env
+.DS_Store
+dist
+node_modules
+test
+vendor
+*.log

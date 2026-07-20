@@ -9,8 +9,8 @@
     "test": "npm run build && node --test",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "docs:init": "git submodule update --init --depth 1 vendor/docs",
-    "docs:update": "git submodule update --remote --merge vendor/docs"
+    "docs:init": "node scripts/update-docs.mjs",
+    "docs:update": "node scripts/update-docs.mjs"
   },
   "keywords": [
     "mcp",

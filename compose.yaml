@@ -1,0 +1,38 @@
+services:
+  lilygo-doc-mcp:
+    image: ${LILYGO_DOC_MCP_IMAGE:-ghcr.io/xinyuan-lilygo/lilygo-doc-mcp:latest}
+    container_name: lilygo-doc-mcp
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DOCS_DIR: /app/vendor/docs/en/products
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+    ports:
+      - "${LILYGO_DOC_MCP_BIND_ADDRESS:-127.0.0.1}:${LILYGO_DOC_MCP_PORT:-3000}:3000"
+    networks:
+      - npm_proxy
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health').then(async r => {
+            const body = await r.json();
+            if (!r.ok || body.status !== 'ok' || body.products < 1) process.exit(1);
+          }).catch(() => process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  npm_proxy:
+    external: true
+    name: npm_proxy

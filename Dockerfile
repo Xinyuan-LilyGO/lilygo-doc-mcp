@@ -19,7 +19,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
-COPY .gitmodules ./
+COPY scripts/ ./scripts/
 
 # Clone only the en/products subtree to keep image size small
 RUN git clone --filter=blob:none --sparse --depth 1 \

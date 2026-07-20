@@ -1,5 +1,7 @@
 .claude/
+.env
 node_modules/
 dist/
+vendor/docs/
 .DS_Store
 *.log

@@ -2,23 +2,26 @@
 
 MCP server for [LILYGO](https://www.lilygo.cc) product documentation. Exposes LILYGO hardware docs as structured tools for LLM clients via the [Model Context Protocol](https://modelcontextprotocol.io).
 
-Documentation is served from a local git submodule of [Xinyuan-LilyGO/documentation](https://github.com/Xinyuan-LilyGO/documentation). No runtime GitHub API calls — zero rate limit issues. Docs stay up-to-date automatically via a GitHub webhook.
+Documentation is served from a local sparse git checkout of [Xinyuan-LilyGO/documentation](https://github.com/Xinyuan-LilyGO/documentation). No runtime GitHub API calls — zero rate limit issues. Docs can stay up to date automatically via a GitHub webhook.
 
 ## Quick start
 
-### 1. Clone with submodule
+### 1. Clone and install
 
 ```bash
-git clone --recurse-submodules https://github.com/your-org/lilygo-doc-mcp
+git clone https://github.com/your-org/lilygo-doc-mcp
 cd lilygo-doc-mcp
 npm install
+npm run docs:init
 npm run build
 ```
 
-If you cloned without `--recurse-submodules`, run:
+`npm run docs:init` clones only the `en/products` documentation subtree into `vendor/docs`.
+
+To point at another docs checkout, set `DOCS_REPO_DIR` before running the command:
 
 ```bash
-npm run docs:init
+DOCS_REPO_DIR=/path/to/documentation npm run docs:update
 ```
 
 ### 2. Start the server
@@ -67,7 +70,7 @@ GITHUB_WEBHOOK_SECRET=your-secret PORT=3000 npm start
 ```
 
 On every push to the documentation repo, the server will:
-1. Run `git submodule update --remote --merge vendor/docs`
+1. Run `node scripts/update-docs.mjs`
 2. Reload the in-memory product cache. Product categories are discovered automatically.
 
 ## Endpoints
@@ -106,26 +109,40 @@ docker logs -f lilygo-doc-mcp
 | `PORT` | `3000` | HTTP server port |
 | `GITHUB_WEBHOOK_SECRET` | _(empty)_ | GitHub webhook secret for signature verification. If unset, signature check is skipped. |
 | `DOCS_DIR` | `vendor/docs/en/products` | Path to local documentation directory |
+| `DOCS_REPO_DIR` | `vendor/docs` | Path to the local documentation git checkout updated by `docs:init`, `docs:update`, and webhook pushes |
+| `DOCS_REPO_URL` | `https://github.com/Xinyuan-LilyGO/documentation.git` | Documentation repository URL |
+| `DOCS_REPO_BRANCH` | `master` | Documentation repository branch |
+| `DOCS_SPARSE_PATH` | `en/products` | Sparse checkout path to serve |
 
 ## Docker
 
-```dockerfile
-FROM node:22-alpine
-WORKDIR /app
-COPY . .
-RUN npm ci && npm run build
-EXPOSE 3000
-CMD ["node", "dist/index.js"]
-```
-
-Build and run:
+Create the shared Docker network once. It is harmless locally and lets Nginx Proxy Manager reach the service in production:
 
 ```bash
-docker build -t lilygo-doc-mcp .
-docker run -p 3000:3000 \
-  -e GITHUB_WEBHOOK_SECRET=your-secret \
-  lilygo-doc-mcp
+docker network inspect npm_proxy >/dev/null 2>&1 || docker network create npm_proxy
+cp .env.example .env
 ```
+
+Run the published GHCR image:
+
+```bash
+docker compose pull
+docker compose up -d --wait
+```
+
+Build and run the current local source instead:
+
+```bash
+docker compose -f compose.yaml -f compose.local.yaml up -d --build --wait
+```
+
+The service is bound to `127.0.0.1:3000` by default:
+
+```bash
+curl http://127.0.0.1:3000/health
+```
+
+Set `LILYGO_DOC_MCP_BIND_ADDRESS=0.0.0.0` only when direct LAN access is intentional. Public deployments should keep the loopback binding and expose the service through Nginx Proxy Manager on the shared `npm_proxy` network.
 
 ## License
 

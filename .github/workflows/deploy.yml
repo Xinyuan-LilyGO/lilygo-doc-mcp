@@ -93,6 +93,9 @@ jobs:
     environment: production
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -105,7 +108,7 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Pull image and restart service
+      - name: Upload Compose config and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -113,9 +116,15 @@ jobs:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/lilygo-doc-mcp' }}
         run: |
           set -eu
+          scp \
+            -i ~/.ssh/id_ed25519 \
+            -o IdentitiesOnly=yes \
+            -P "$DEPLOY_PORT" \
+            compose.yaml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/compose.yaml"
           ssh \
             -i ~/.ssh/id_ed25519 \
             -o IdentitiesOnly=yes \
             -p "$DEPLOY_PORT" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$DEPLOY_PATH' && docker compose pull && docker compose up -d --remove-orphans --wait --wait-timeout 60"
+            "set -e; docker network inspect npm_proxy >/dev/null 2>&1 || docker network create npm_proxy; cd '$DEPLOY_PATH'; docker compose pull; docker compose up -d --remove-orphans --wait --wait-timeout 60"

@@ -23,6 +23,7 @@ const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DOCS_DIR = process.env.DOCS_DIR ?? resolveDefaultDocsDir();
+const UPDATE_DOCS_SCRIPT = join(REPO_ROOT, "scripts/update-docs.mjs");
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -194,15 +195,14 @@ async function findProduct(docsDir: string, name: string): Promise<ProductMeta |
   );
 }
 
-// ── Git submodule update ───────────────────────────────────────────────────
+// ── Documentation checkout update ─────────────────────────────────────────
 
 async function pullDocsUpdate(): Promise<void> {
-  try {
-    await execFileAsync("git", ["-C", REPO_ROOT, "submodule", "update", "--remote", "--merge", "vendor/docs"]);
-    console.error("[lilygo-docs] submodule updated");
-  } catch (e) {
-    console.error("[lilygo-docs] submodule update failed:", e);
-  }
+  await execFileAsync(process.execPath, [UPDATE_DOCS_SCRIPT], {
+    env: process.env,
+    maxBuffer: 1024 * 1024 * 20,
+  });
+  console.error("[lilygo-docs] documentation checkout updated");
 }
 
 // ── Webhook signature verification ────────────────────────────────────────

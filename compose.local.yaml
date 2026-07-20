@@ -1,0 +1,5 @@
+services:
+  lilygo-doc-mcp:
+    image: lilygo-doc-mcp:local
+    build:
+      context: .
