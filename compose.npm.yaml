@@ -1,0 +1,10 @@
+services:
+  lilygo-doc-mcp:
+    networks:
+      - default
+      - npm_proxy
+
+networks:
+  npm_proxy:
+    external: true
+    name: npm_proxy

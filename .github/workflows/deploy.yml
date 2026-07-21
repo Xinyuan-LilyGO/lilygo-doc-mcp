@@ -108,6 +108,21 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Prepare deployment directory
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/lilygo-doc-mcp' }}
+        run: |
+          set -eu
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -o IdentitiesOnly=yes \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d '$DEPLOY_PATH'"
+
       - name: Upload Compose config and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -120,11 +135,22 @@ jobs:
             -i ~/.ssh/id_ed25519 \
             -o IdentitiesOnly=yes \
             -P "$DEPLOY_PORT" \
-            compose.yaml \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/compose.yaml"
+            .env.example compose.yaml compose.npm.yaml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
           ssh \
             -i ~/.ssh/id_ed25519 \
             -o IdentitiesOnly=yes \
             -p "$DEPLOY_PORT" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -e; docker network inspect npm_proxy >/dev/null 2>&1 || docker network create npm_proxy; cd '$DEPLOY_PATH'; docker compose pull; docker compose up -d --remove-orphans --wait --wait-timeout 60"
+            "set -e
+             cd '$DEPLOY_PATH'
+             if [ ! -f .env ]; then cp .env.example .env; fi
+             if grep -q '^GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret$' .env; then
+               webhook_secret=\$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')
+               sed \"s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=\$webhook_secret/\" .env > .env.tmp
+               mv .env.tmp .env
+               chmod 600 .env
+             fi
+             docker network inspect npm_proxy >/dev/null 2>&1 || docker network create npm_proxy
+             docker compose -f compose.yaml -f compose.npm.yaml pull
+             docker compose -f compose.yaml -f compose.npm.yaml up -d --remove-orphans --wait --wait-timeout 60"

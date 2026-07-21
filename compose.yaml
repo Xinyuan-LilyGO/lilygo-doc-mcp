@@ -11,8 +11,6 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
     ports:
       - "${LILYGO_DOC_MCP_BIND_ADDRESS:-127.0.0.1}:${LILYGO_DOC_MCP_PORT:-3000}:3000"
-    networks:
-      - npm_proxy
     cap_drop:
       - ALL
     security_opt:
@@ -31,8 +29,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-
-networks:
-  npm_proxy:
-    external: true
-    name: npm_proxy
